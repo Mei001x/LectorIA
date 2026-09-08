@@ -4,6 +4,7 @@
   "version": "0.1.1",
   "description": "Extensión que lee páginas web en voz alta y responde preguntas de comprensión.",
   "permissions": ["activeTab", "scripting"],
+  "host_permissions": ["http://localhost:3000/*"],
   "action": {
     "default_popup": "popup/popup.html"
   },

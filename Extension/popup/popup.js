@@ -2,6 +2,28 @@ const playPauseBtn = document.getElementById("playPauseBtn");
 const restartBtn = document.getElementById("restartBtn");
 const questionsBtn = document.getElementById("questionsBtn");
 const statusEl = document.getElementById("status");
+const serverStatusEl = document.getElementById("serverStatus");
+
+// Verifica que el servidor local (Server/) esté disponible. No bloquea el
+// resto del popup: si falla, el usuario igual puede leer la página, solo
+// el cuestionario (que depende del servidor) no va a funcionar todavía.
+async function checkServerConnection() {
+  if (!serverStatusEl) return;
+  serverStatusEl.textContent = "Servidor IA: verificando...";
+  serverStatusEl.className = "server-status checking";
+
+  chrome.runtime.sendMessage({ action: "PING_SERVER" }, (result) => {
+    if (chrome.runtime.lastError || !result?.connected) {
+      serverStatusEl.textContent = "Servidor IA: sin conexión";
+      serverStatusEl.className = "server-status offline";
+      return;
+    }
+    serverStatusEl.textContent = "Servidor IA: conectado";
+    serverStatusEl.className = "server-status online";
+  });
+}
+
+checkServerConnection();
 
 // Envía un mensaje al content script de la pestaña activa
 async function sendToActiveTab(message) {
