@@ -75,6 +75,16 @@ function speakSoon() {
 }
 
 function startReading() {
+  if (readingState === "paused") {
+    readingState = "playing";
+    if (window.speechSynthesis.paused) {
+      window.speechSynthesis.resume();
+    } else if (!window.speechSynthesis.speaking) {
+      speakSoon();
+    }
+    return;
+  }
+
   if (sentences.length === 0) {
     sentences = extractSentences();
     currentIndex = 0;
@@ -85,7 +95,9 @@ function startReading() {
 
 function pauseReading() {
   readingState = "paused";
-  window.speechSynthesis.cancel();
+  if (window.speechSynthesis.speaking) {
+    window.speechSynthesis.pause();
+  }
 }
 
 function restartReading() {
@@ -152,12 +164,16 @@ window.addEventListener(
   true
 );
 
-chrome.runtime.onMessage.addListener((message) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "TOGGLE_READING") {
     toggleReading();
+    sendResponse({ readingState });
   } else if (message.action === "RESTART_READING") {
     restartReading();
+    sendResponse({ readingState });
   } else if (message.action === "ASK_QUESTIONS") {
     askQuestions();
+  } else if (message.action === "GET_READING_STATE") {
+    sendResponse({ readingState });
   }
 });
