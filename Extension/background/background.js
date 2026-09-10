@@ -21,10 +21,107 @@ async function pingServer() {
   }
 }
 
+async function callGenerate(prompt) {
+  try {
+    const response = await fetch(`${SERVER_URL}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt }),
+    });
+ 
+    if (!response.ok) {
+      const errorBody = await response.json().catch(() => ({}));
+      return { error: errorBody.error || `Servidor respondió ${response.status}` };
+    }
+ 
+    const data = await response.json();
+    if (typeof data.text !== "string") {
+      return { error: "El servidor no devolvió texto válido." };
+    }
+    return { text: data.text };
+  } catch (err) {
+    return { error: "No se pudo conectar con el servidor local." };
+  }
+}
+
+//Evitar errores de Gemini
+function parseJsonFromModelText(text) {
+  const cleaned = text
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+  return JSON.parse(cleaned);
+}
+ 
+async function askAI(question, context) {
+  const prompt = [
+    `Contexto del texto que el usuario está escuchando: "${context}"`,
+    ``,
+    `El usuario preguntó: "${question}"`,
+    ``,
+    `Responde de forma clara y breve (2 a 3 oraciones), en español, pensando en que tu respuesta será leída en voz alta a una persona con discapacidad visual. No uses markdown, listas, ni símbolos.`,
+  ].join("\n");
+ 
+  const result = await callGenerate(prompt);
+  if (result.error) return result;
+  return { answer: result.text };
+}
+
+async function startQuizRequest(content) {
+  const prompt = [
+    `Basándote ÚNICAMENTE en el siguiente texto, genera exactamente 4 preguntas ABIERTAS de comprensión (nada de opción múltiple, sin opciones de respuesta) para evaluar si alguien entendió el contenido.`,
+    `Responde ÚNICAMENTE con un arreglo JSON de 4 strings, sin texto adicional, sin explicación, sin backticks. Formato exacto: ["pregunta 1", "pregunta 2", "pregunta 3", "pregunta 4"]`,
+    ``,
+    `Texto:`,
+    `"""${content}"""`,
+  ].join("\n");
+
+  const result = await callGenerate(prompt);
+  if (result.error) return result;
+ 
+  try {
+    const questions = parseJsonFromModelText(result.text);
+    if (!Array.isArray(questions) || questions.length === 0) {
+      return { error: "El servidor no devolvió preguntas válidas." };
+    }
+    return { questions };
+  } catch (err) {
+    return { error: "No se pudo interpretar las preguntas generadas." };
+  }
+}
+
+async function evaluateQuiz(items) {
+  const prompt = [
+    `Vas a evaluar las respuestas de un estudiante a un cuestionario de comprensión lectora.`,
+    `Para cada pregunta: indica si respondió bien, qué le faltó o en qué se equivocó si falló, y si no respondió (la respuesta viene como null) dile cuál era la idea clave que se buscaba.`,
+    `Da la retroalimentación de las 4 preguntas en un solo texto corrido, claro y breve, en español, SIN listas ni markdown -- será leído en voz alta a una persona con discapacidad visual.`,
+    ``,
+    `Preguntas y respuestas del usuario (formato JSON):`,
+    JSON.stringify(items),
+  ].join("\n");
+ 
+  const result = await callGenerate(prompt);
+  if (result.error) return result;
+  return { feedback: result.text };
+}
+ 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "PING_SERVER") {
     pingServer().then(sendResponse);
     return true; // mantiene el canal abierto para la respuesta async
+  }
+  if (message.action === "ASK_AI") {
+    askAI(message.question, message.context).then(sendResponse);
+    return true;
+  }
+  if (message.action === "START_QUIZ") {
+    startQuizRequest(message.content).then(sendResponse);
+    return true;
+  }
+  if (message.action === "EVALUATE_QUIZ") {
+    evaluateQuiz(message.items).then(sendResponse);
+    return true;
   }
 });
 
