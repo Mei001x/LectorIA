@@ -242,6 +242,10 @@ function detectVoiceCommand(transcript) {
   const text = normalizeText(transcript);
   if (!text.includes(WAKE_WORD)) return null;
 
+  if (/\b(subir|sube)\s+notas?\b/.test(text)) return "notes-upload";
+  if (/\b(comenzar|comienza|iniciar|inicia|empezar|empieza)\s+notas?\b/.test(text)) {
+    return "notes-start";
+  }
   if (/(pausa|detente|deten|para)\b/.test(text)) return "pause";
   if (/(reanuda|continua|sigue|resume)/.test(text)) return "resume";
   if (/(empieza|inicia|comienza|arranca|lee)/.test(text)) return "start";
@@ -378,7 +382,9 @@ function startWakeWordListener() {
     console.log('Oye Lector [wake]: escuché "' + transcript + '"');
     const command = detectVoiceCommand(transcript);
 
-    if (command === "start" && readingState === "stopped") {
+    if (command === "notes-start" && !isRecordingNotes) {
+      startNotesRecording();
+    } else if (command === "start" && readingState === "stopped") {
       showNotice('Oye Lector: "empieza a leer" -- iniciando...');
       startReading();
     } else if (command === "pause" && readingState === "playing") {
