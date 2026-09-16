@@ -3,8 +3,17 @@
   "name": "Oye Lector",
   "version": "0.1.1",
   "description": "Extensión que lee páginas web en voz alta y responde preguntas de comprensión.",
-  "permissions": ["activeTab", "scripting"],
-  "host_permissions": ["http://localhost:3000/*"],
+  "permissions": ["activeTab", "scripting","identity"],
+  "host_permissions": ["http://localhost:3000/*",
+"https://www.googleapis.com/*",
+"https://docs.googleapis.com/*"],
+"oauth2": {
+    "client_id": "133023166130-giin8ei5ned8trhthkagdumechhmiff0.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/documents",
+      "https://www.googleapis.com/auth/drive.file"
+    ]
+  },
   "action": {
     "default_popup": "popup/popup.html"
   },

@@ -632,6 +632,156 @@ function finishQuizAndEvaluate() {
   );
 }
 
+// ---------- Notas por voz -> Google Docs ----------
+ 
+let isRecordingNotes = false;
+let notesBuffer = [];
+ 
+// Nombre del documento: preferimos el título del artículo; si no hay uno
+// claro, usamos la fecha. Así, varias notas el mismo día del mismo
+// artículo van todas al mismo documento (porque el nombre coincide).
+function getArticleTitle() {
+  const ogTitle = document.querySelector('meta[property="og:title"]')?.content;
+  if (ogTitle && ogTitle.trim()) return ogTitle.trim();
+ 
+  const h1 = document.querySelector("h1");
+  if (h1 && h1.textContent.trim()) return h1.textContent.trim();
+ 
+  if (document.title && document.title.trim()) {
+    // Quita sufijos típicos como " - Wikipedia" o " | Sitio X".
+    return document.title.split(" - ")[0].split(" | ")[0].trim();
+  }
+ 
+  return null;
+}
+ 
+function getTodayDateString() {
+  const today = new Date();
+  const yyyy = today.getFullYear();
+  const mm = String(today.getMonth() + 1).padStart(2, "0");
+  const dd = String(today.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+ 
+function getNoteDocTitle() {
+  const articleTitle = getArticleTitle();
+  if (articleTitle) return `Notas - ${articleTitle}`;
+  return `Notas - ${getTodayDateString()}`;
+}
+ 
+function toggleNotesRecording() {
+  if (isRecordingNotes) {
+    uploadNotes();
+  } else {
+    startNotesRecording();
+  }
+}
+ 
+function startNotesRecording() {
+  stopWakeWordListener();
+  stopListeningForQuestion();
+  isRecordingNotes = true;
+  notesBuffer = [];
+  showNotice("Oye Lector: grabando notas... di 'Oye Lector, sube nota' para terminar.");
+  speakText(
+    "Comenzando a grabar tus notas. Cuando termines, di: Oye Lector, sube nota.",
+    () => listenForNotes()
+  );
+}
+ 
+function listenForNotes() {
+  const rec = getSpeechRecognition();
+  if (!rec) {
+    isRecordingNotes = false;
+    showNotice("Oye Lector: tu navegador no soporta reconocimiento de voz.");
+    speakText("Tu navegador no soporta reconocimiento de voz, no puedo grabar notas así.");
+    return;
+  }
+ 
+  rec.onresult = (event) => {
+    const transcript = event.results[event.results.length - 1][0].transcript;
+    console.log('Oye Lector [notas]: escuché "' + transcript + '"');
+ 
+    const command = detectVoiceCommand(transcript);
+    if (command === "notes-upload") {
+      isRecordingNotes = false;
+      rec.onend = null;
+      uploadNotes();
+      return;
+    }
+ 
+    // No fue el comando de subir: lo agregamos como parte de la nota.
+    notesBuffer.push(transcript);
+    showNotice(`Oye Lector: nota agregada (${notesBuffer.length}).`);
+  };
+ 
+  rec.onerror = (event) => {
+    if (event.error === "not-allowed") {
+      isRecordingNotes = false;
+      showNotice("Oye Lector: necesito permiso de micrófono para escucharte.");
+    }
+    // otros errores: onend reintenta solo mientras isRecordingNotes siga activo
+  };
+ 
+  rec.onend = () => {
+    if (isRecordingNotes) {
+      try {
+        rec.start();
+      } catch (err) {
+        // se reintentará en el próximo onend
+      }
+    }
+  };
+ 
+  try {
+    rec.start();
+  } catch (err) {
+    // Ignorar si ya estaba escuchando.
+  }
+}
+ 
+function resumeMicAfterNotes() {
+  if (readingState === "paused") {
+    startListeningForQuestion();
+  } else {
+    startWakeWordListener();
+  }
+}
+ 
+function uploadNotes() {
+  isRecordingNotes = false;
+ 
+  if (notesBuffer.length === 0) {
+    showNotice("Oye Lector: no grabaste ninguna nota.");
+    speakText("No grabaste ninguna nota todavía.", resumeMicAfterNotes);
+    return;
+  }
+ 
+  showNotice("Oye Lector: subiendo notas a Google Docs...");
+  const title = getNoteDocTitle();
+  const noteText = notesBuffer.join(". ") + ".";
+  const notesToUpload = notesBuffer.length;
+  notesBuffer = [];
+ 
+  chrome.runtime.sendMessage(
+    { action: "UPLOAD_NOTE", title, noteText },
+    (response) => {
+      if (chrome.runtime.lastError || !response || response.error) {
+        const errorText =
+          response?.error || "No se pudo conectar con Google Docs.";
+        showNotice(`Oye Lector: ${errorText}`);
+        speakText(`No pude subir tus notas a Google Docs. ${errorText}`, resumeMicAfterNotes);
+        return;
+      }
+      showNotice("Oye Lector: notas subidas correctamente.");
+      speakText(
+        `Subí ${notesToUpload} nota${notesToUpload === 1 ? "" : "s"} al documento ${title}.`,
+        resumeMicAfterNotes
+      );
+    }
+  );
+}
+
 // ---------- Atajos de teclado globales ----------
 
 function isTypingInField(target) {
@@ -667,6 +817,8 @@ window.addEventListener(
       restartReading();
     } else if (event.key.toLowerCase() === "c") {
       startQuiz();
+      } else if (event.key === "Shift") {
+      toggleNotesRecording();
     }
   },
   true
@@ -685,6 +837,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     startQuiz();
   } else if (message.action === "GET_READING_STATE") {
     sendResponse({ readingState });
+  } else if (message.action === "TOGGLE_NOTES") {
+    toggleNotesRecording();
+    sendResponse({ isRecordingNotes });
+  } else if (message.action === "GET_NOTES_STATE") {
+    sendResponse({ isRecordingNotes });
   }
 });
 

@@ -105,6 +105,95 @@ async function evaluateQuiz(items) {
   if (result.error) return result;
   return { feedback: result.text };
 }
+// ---------- Notas -> Google Docs ----------
+// Requiere que manifest.json tenga configurado un client_id de OAuth
+// (ver instrucciones aparte). Usamos el scope "drive.file", que solo da
+// acceso a los archivos que ESTA app crea -- no a todo el Drive del
+// usuario, por seguridad y porque así lo aprueba Google más rápido.
+ 
+function getAuthToken() {
+  return new Promise((resolve, reject) => {
+    chrome.identity.getAuthToken({ interactive: true }, (token) => {
+      if (chrome.runtime.lastError || !token) {
+        reject(new Error(chrome.runtime.lastError?.message || "No se pudo autenticar con Google."));
+        return;
+      }
+      resolve(token);
+    });
+  });
+}
+ 
+// Busca si ya existe un Google Doc con ese nombre exacto (creado antes
+// por esta misma app). Si lo encuentra, reutilizamos ese documento en vez
+// de crear uno nuevo -- así varias notas del mismo día/artículo se van
+// acumulando en un solo archivo.
+async function findExistingDoc(token, title) {
+  const safeTitle = title.replace(/'/g, "\\'");
+  const query = encodeURIComponent(
+    `name='${safeTitle}' and mimeType='application/vnd.google-apps.document' and trashed=false`
+  );
+  const response = await fetch(
+    `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name)`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (!response.ok) throw new Error(`Drive respondió ${response.status}`);
+  const data = await response.json();
+  return data.files && data.files.length > 0 ? data.files[0].id : null;
+}
+ 
+async function createDoc(token, title) {
+  const response = await fetch("https://docs.googleapis.com/v1/documents", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ title }),
+  });
+  if (!response.ok) throw new Error(`Docs respondió ${response.status}`);
+  const data = await response.json();
+  return data.documentId;
+}
+ 
+// Inserta el texto al FINAL del documento (endOfSegmentLocation evita
+// tener que calcular manualmente en qué índice termina el contenido).
+async function appendTextToDoc(token, docId, text) {
+  const response = await fetch(
+    `https://docs.googleapis.com/v1/documents/${docId}:batchUpdate`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        requests: [
+          {
+            insertText: {
+              text: `\n${text}`,
+              endOfSegmentLocation: { segmentId: "" },
+            },
+          },
+        ],
+      }),
+    }
+  );
+  if (!response.ok) throw new Error(`Docs respondió ${response.status}`);
+}
+ 
+async function uploadNoteToGoogleDocs(title, noteText) {
+  try {
+    const token = await getAuthToken();
+    let docId = await findExistingDoc(token, title);
+    if (!docId) {
+      docId = await createDoc(token, title);
+    }
+    await appendTextToDoc(token, docId, noteText);
+    return { success: true, docId };
+  } catch (err) {
+    return { error: err.message || "No se pudo subir la nota a Google Docs." };
+  }
+}
  
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "PING_SERVER") {
@@ -121,6 +210,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message.action === "EVALUATE_QUIZ") {
     evaluateQuiz(message.items).then(sendResponse);
+    return true;
+  }
+  if (message.action === "UPLOAD_NOTE") {
+    uploadNoteToGoogleDocs(message.title, message.noteText).then(sendResponse);
     return true;
   }
 });

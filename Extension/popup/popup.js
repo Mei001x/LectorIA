@@ -1,6 +1,7 @@
 const playPauseBtn = document.getElementById("playPauseBtn");
 const restartBtn = document.getElementById("restartBtn");
 const questionsBtn = document.getElementById("questionsBtn");
+const notesBtn = document.getElementById("notesBtn");
 const statusEl = document.getElementById("status");
 const serverStatusEl = document.getElementById("serverStatus");
 
@@ -11,6 +12,12 @@ function updateReadingButton(readingState) {
     playing: "Reproduciendo (Espacio)",
   };
   playPauseBtn.textContent = labels[readingState] || labels.stopped;
+}
+
+function updateNotesButton(isRecordingNotes) {
+  notesBtn.textContent = isRecordingNotes
+    ? "Subir notas (Shift)"
+    : "Comenzar notas (Shift)";
 }
 
 // Verifica que el servidor local (Server/) esté disponible. No bloquea el
@@ -76,6 +83,15 @@ questionsBtn.addEventListener("click", () => {
   statusEl.textContent = "Generando preguntas... (próximamente)";
 });
 
+notesBtn.addEventListener("click", () => {
+  sendToActiveTab({ action: "TOGGLE_NOTES" }, (response) => {
+    updateNotesButton(response?.isRecordingNotes);
+    statusEl.textContent = response?.isRecordingNotes
+      ? "Grabando notas..."
+      : "Subiendo notas...";
+  });
+});
+
 document.addEventListener("keydown", (event) => {
   if (event.key === "Enter" || event.code === "Enter" || event.code === "NumpadEnter") {
     event.preventDefault();
@@ -90,6 +106,10 @@ document.addEventListener("keydown", (event) => {
       statusEl.textContent = response?.readingState === "playing"
         ? "Reproduciendo."
         : "Pausado.";
+    });
+    } else if (event.key === "Shift") {
+    sendToActiveTab({ action: "TOGGLE_NOTES" }, (response) => {
+      updateNotesButton(response?.isRecordingNotes);
     });
   }
 });
