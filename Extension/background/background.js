@@ -5,9 +5,29 @@
 
 const SERVER_URL = "http://localhost:3000";
 
+// Helper genérico de POST JSON contra el backend. Devuelve { data } o
+// { error } — nunca lanza, para que quien llame pueda usar el resultado
+// sin try/catch.
+async function postJSON(path, body) {
+  try {
+    const response = await fetch(`${SERVER_URL}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      return { error: data.error || `Servidor respondió ${response.status}` };
+    }
+    return { data };
+  } catch (err) {
+    return { error: "No se pudo conectar con el servidor local." };
+  }
+}
+
 // Chequeo simple de conectividad contra GET /health del backend.
-// Devuelve { connected: true } o { connected: false, error } — nunca lanza,
-// para que quien llame (el popup) pueda mostrar el resultado sin try/catch.
 async function pingServer() {
   try {
     const response = await fetch(`${SERVER_URL}/health`);
@@ -22,38 +42,14 @@ async function pingServer() {
 }
 
 async function callGenerate(prompt) {
-  try {
-    const response = await fetch(`${SERVER_URL}/api/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt }),
-    });
- 
-    if (!response.ok) {
-      const errorBody = await response.json().catch(() => ({}));
-      return { error: errorBody.error || `Servidor respondió ${response.status}` };
-    }
- 
-    const data = await response.json();
-    if (typeof data.text !== "string") {
-      return { error: "El servidor no devolvió texto válido." };
-    }
-    return { text: data.text };
-  } catch (err) {
-    return { error: "No se pudo conectar con el servidor local." };
+  const result = await postJSON("/api/generate", { prompt });
+  if (result.error) return { error: result.error };
+  if (typeof result.data.text !== "string") {
+    return { error: "El servidor no devolvió texto válido." };
   }
+  return { text: result.data.text };
 }
 
-//Evitar errores de Gemini
-function parseJsonFromModelText(text) {
-  const cleaned = text
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/```\s*$/i, "")
-    .trim();
-  return JSON.parse(cleaned);
-}
- 
 async function askAI(question, context) {
   const prompt = [
     `Contexto del texto que el usuario está escuchando: "${context}"`,
@@ -62,50 +58,53 @@ async function askAI(question, context) {
     ``,
     `Responde de forma clara y breve (2 a 3 oraciones), en español, pensando en que tu respuesta será leída en voz alta a una persona con discapacidad visual. No uses markdown, listas, ni símbolos.`,
   ].join("\n");
- 
+
   const result = await callGenerate(prompt);
   if (result.error) return result;
   return { answer: result.text };
 }
 
+// Pide al servidor 4 preguntas ABIERTAS de comprensión sobre lo leído.
+// El servidor devuelve JSON estructurado y validado (responseSchema de
+// Gemini), así que no hace falta parsear texto libre acá.
 async function startQuizRequest(content) {
-  const prompt = [
-    `Basándote ÚNICAMENTE en el siguiente texto, genera exactamente 4 preguntas ABIERTAS de comprensión (nada de opción múltiple, sin opciones de respuesta) para evaluar si alguien entendió el contenido.`,
-    `Responde ÚNICAMENTE con un arreglo JSON de 4 strings, sin texto adicional, sin explicación, sin backticks. Formato exacto: ["pregunta 1", "pregunta 2", "pregunta 3", "pregunta 4"]`,
-    ``,
-    `Texto:`,
-    `"""${content}"""`,
-  ].join("\n");
+  const result = await postJSON("/api/questions", {
+    text: content,
+    numQuestions: 4,
+    language: "es",
+  });
+  if (result.error) return { error: result.error };
 
-  const result = await callGenerate(prompt);
-  if (result.error) return result;
- 
-  try {
-    const questions = parseJsonFromModelText(result.text);
-    if (!Array.isArray(questions) || questions.length === 0) {
-      return { error: "El servidor no devolvió preguntas válidas." };
-    }
-    return { questions };
-  } catch (err) {
-    return { error: "No se pudo interpretar las preguntas generadas." };
+  const { questions } = result.data;
+  if (!Array.isArray(questions) || questions.length === 0) {
+    return { error: "El servidor no devolvió preguntas válidas." };
   }
+  return { questions };
 }
 
+// Evalúa las respuestas del cuestionario: cada ítem llega como
+// { question, answer } (answer es null si no respondió a tiempo). El
+// servidor devuelve, por cada una, si es correcta y un puntaje de 0 a 10,
+// más un overallScore. Acá lo convertimos a un solo texto para que
+// content.js lo lea en voz alta (mismo contrato que antes: { feedback }).
 async function evaluateQuiz(items) {
-  const prompt = [
-    `Vas a evaluar las respuestas de un estudiante a un cuestionario de comprensión lectora.`,
-    `Para cada pregunta: indica si respondió bien, qué le faltó o en qué se equivocó si falló, y si no respondió (la respuesta viene como null) dile cuál era la idea clave que se buscaba.`,
-    `Da la retroalimentación de las 4 preguntas en un solo texto corrido, claro y breve, en español, SIN listas ni markdown -- será leído en voz alta a una persona con discapacidad visual.`,
-    ``,
-    `Preguntas y respuestas del usuario (formato JSON):`,
-    JSON.stringify(items),
-  ].join("\n");
- 
-  const result = await callGenerate(prompt);
-  if (result.error) return result;
-  return { feedback: result.text };
+  const result = await postJSON("/api/evaluate", { items, language: "es" });
+  if (result.error) return { error: result.error };
+
+  const { results, overallScore } = result.data;
+  if (!Array.isArray(results) || results.length === 0) {
+    return { error: "El servidor no devolvió una evaluación válida." };
+  }
+
+  const perQuestion = results
+    .map((r, i) => `Pregunta ${i + 1}: ${r.correct ? "correcta" : "incorrecta"}, puntaje ${r.score} de 10. ${r.feedback}`)
+    .join(" ");
+
+  const feedback = `Tu puntaje general fue ${overallScore} de 10. ${perQuestion}`;
+
+  return { feedback, results, overallScore };
 }
- 
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "PING_SERVER") {
     pingServer().then(sendResponse);

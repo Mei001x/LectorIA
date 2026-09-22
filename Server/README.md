@@ -41,9 +41,10 @@ está corriendo antes de pedir un cuestionario.
 { "status": "ok", "service": "lectoria-server" }
 ```
 
-### `POST /api/quiz`
-El endpoint principal: genera un cuestionario de opción múltiple a partir
-del texto que la extensión ya leyó en voz alta.
+### `POST /api/questions`
+Genera una o más preguntas **abiertas** (sin opciones de respuesta) a partir
+del texto que la extensión ya leyó en voz alta. El usuario responde
+libremente (normalmente por voz).
 
 **Body:**
 ```json
@@ -56,22 +57,54 @@ del texto que la extensión ya leyó en voz alta.
 
 **Respuesta:**
 ```json
+{ "questions": ["¿...?", "¿...?", "¿...?", "¿...?"] }
+```
+
+`numQuestions` es opcional (default 4, máximo 10) y `language` también
+(default "es"). Al igual que antes, la salida está forzada a este esquema
+mediante `responseSchema` de Gemini, así que siempre llega JSON válido.
+
+### `POST /api/evaluate`
+Evalúa una o más respuestas abiertas contra sus preguntas: para cada una
+indica si es correcta o incorrecta y le asigna un puntaje de 0 a 10.
+
+**Body:**
+```json
 {
-  "questions": [
+  "items": [
+    { "question": "¿Dónde nace el río Amazonas?", "answer": "En los Andes peruanos" },
+    { "question": "¿A qué océano desemboca?", "answer": null }
+  ],
+  "language": "es"
+}
+```
+`answer` puede venir `null` si el usuario no respondió a tiempo — el
+servidor lo trata como incorrecto (score 0) y explica cuál era la idea
+esperada. Sirve tanto para evaluar una sola respuesta (`items` con un solo
+elemento) como un cuestionario completo.
+
+**Respuesta:**
+```json
+{
+  "results": [
     {
-      "question": "¿...?",
-      "options": ["A", "B", "C", "D"],
-      "correctIndex": 2,
-      "explanation": "..."
+      "question": "¿Dónde nace el río Amazonas?",
+      "correct": true,
+      "score": 9,
+      "feedback": "Correcto, identificaste bien el origen del río."
+    },
+    {
+      "question": "¿A qué océano desemboca?",
+      "correct": false,
+      "score": 0,
+      "feedback": "No respondiste. Desemboca en el océano Atlántico."
     }
-  ]
+  ],
+  "overallScore": 4.5
 }
 ```
 
-`numQuestions` y `language` son opcionales (por defecto 4 y "es"). La salida
-está forzada a este esquema mediante `responseSchema` de Gemini, así que
-siempre llega JSON válido y con esta forma exacta — no hace falta parsear
-texto libre en el content script.
+`overallScore` es el promedio de los puntajes individuales.
 
 ### `POST /api/generate` (genérico, para experimentar)
 Como todavía no está cerrado el flujo completo de datos ni todas las
@@ -83,41 +116,32 @@ rápido desde el front sin crear una ruta nueva cada vez.
 **Respuesta:** `{ "text": "..." }`
 
 Cuando una idea se estabilice, conviene "graduarla" a su propia ruta +
-función en `geminiService.js` (como se hizo con `/api/quiz`), con su propio
+función en `geminiService.js` (como se hizo con `/api/questions` y
+`/api/evaluate`), con su propio
 schema de salida y su propia validación.
 
-## Cómo se conectaría con la extensión
+## Cómo se conecta con la extensión (ya implementado)
 
-Hoy `Extension/background/background.js` está vacío a propósito. La idea es
-que sea el único lugar de la extensión que hace `fetch` a este servidor
-(content.js sigue siendo la capa de orquestación dentro de la página, pero
-no debería hacer llamadas de red directamente). Ejemplo de flujo:
+`Extension/background/background.js` es el único lugar de la extensión que
+hace `fetch` a este servidor (`content.js` nunca llama a la red directo).
+Flujo real:
 
-1. En `content.js`, `askQuestions()` junta el texto ya leído y hace
-   `chrome.runtime.sendMessage({ action: "GENERATE_QUIZ", text })`.
-2. `background.js` escucha ese mensaje y hace:
-   ```js
-   const res = await fetch("http://localhost:3000/api/quiz", {
-     method: "POST",
-     headers: { "Content-Type": "application/json" },
-     body: JSON.stringify({ text }),
-   });
-   const quiz = await res.json();
-   ```
-3. `background.js` responde al content script (o al popup) con el
-   cuestionario para que se muestre/lea al usuario.
+1. En `content.js`, al terminar de leer (o al presionar "C"), se junta el
+   texto leído y se manda `chrome.runtime.sendMessage({ action: "START_QUIZ", content })`.
+2. `background.js` recibe el mensaje y llama a `POST /api/questions` con
+   ese texto, pidiendo 4 preguntas abiertas.
+3. Cada pregunta se lee en voz alta y se escucha la respuesta del usuario
+   por reconocimiento de voz (con límite de tiempo; si no responde, esa
+   respuesta queda como `null`).
+4. Al terminar las 4 preguntas, `content.js` manda
+   `chrome.runtime.sendMessage({ action: "EVALUATE_QUIZ", items })` con
+   los pares `{ question, answer }`.
+5. `background.js` llama a `POST /api/evaluate`, arma un texto de
+   retroalimentación a partir de `results` y `overallScore`, y se lo
+   devuelve a `content.js` para que lo lea en voz alta.
 
-Para que ese `fetch` funcione hace falta agregar `host_permissions` en
-`Extension/manifest.json` apuntando a la URL del servidor, por ejemplo:
-
-```json
-"host_permissions": ["http://localhost:3000/*"]
-```
-
-Esto no se agregó todavía porque, según se indica en el pedido original,
-la estructura y el flujo de datos exacto aún están por determinarse — este
-backend está pensado para ser un punto de partida estable sobre el que
-iterar, no la integración final.
+`host_permissions` en `manifest.json` ya incluye `http://localhost:3000/*`,
+necesario para que ese `fetch` funcione.
 
 ## Seguridad y CORS
 
@@ -128,7 +152,7 @@ iterar, no la integración final.
 - Hay un límite de solicitudes por IP (`RATE_LIMIT_MAX`, default 60 cada 15
   minutos) para no agotar la cuota/saldo de la API de Gemini ante un bug o
   un bucle accidental en el content script.
-- El texto de entrada a `/api/quiz` se recorta defensivamente a 20 000
+- El texto de entrada a `/api/questions` se recorta defensivamente a 20 000
   caracteres.
 
 ## Estructura
@@ -148,8 +172,9 @@ Server/
     │   └── geminiService.js    # único lugar que importa @google/genai
     └── routes/
         ├── health.routes.js
-        ├── quiz.routes.js       # POST /api/quiz
-        └── generate.routes.js   # POST /api/generate (genérico)
+        ├── questions.routes.js   # POST /api/questions
+        ├── evaluate.routes.js    # POST /api/evaluate
+        └── generate.routes.js    # POST /api/generate (genérico)
 ```
 
 ## Notas sobre el modelo de Gemini

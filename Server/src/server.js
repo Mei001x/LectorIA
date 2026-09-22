@@ -19,7 +19,8 @@ import { corsMiddleware } from "./middleware/cors.js";
 import { rateLimiter } from "./middleware/rateLimiter.js";
 import { notFoundHandler, errorHandler } from "./middleware/errorHandler.js";
 import { healthRouter } from "./routes/health.routes.js";
-import { quizRouter } from "./routes/quiz.routes.js";
+import { questionsRouter } from "./routes/questions.routes.js";
+import { evaluateRouter } from "./routes/evaluate.routes.js";
 import { generateRouter } from "./routes/generate.routes.js";
 
 assertConfig();
@@ -31,7 +32,8 @@ app.use(express.json({ limit: "1mb" }));
 app.use("/api", rateLimiter);
 
 app.use(healthRouter);
-app.use("/api", quizRouter);
+app.use("/api", questionsRouter);
+app.use("/api", evaluateRouter);
 app.use("/api", generateRouter);
 
 app.use(notFoundHandler);

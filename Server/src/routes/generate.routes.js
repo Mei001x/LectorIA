@@ -7,7 +7,8 @@
 // están definidas, este endpoint permite iterar rápido desde el front sin
 // tener que agregar una ruta nueva por cada experimento. Cuando una feature
 // se estabilice, conviene "graduarla" a su propia ruta + método de servicio
-// (como se hizo con /api/quiz), con su propio schema y validación.
+// (como se hizo con /api/questions y /api/evaluate), con su propio schema
+// y validación.
 
 import { Router } from "express";
 import { generateText } from "../services/geminiService.js";
