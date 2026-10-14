@@ -160,13 +160,6 @@ LectorIA es un prototipo desarrollado durante una hackatón de 3 días.
 - [ ] Publicación en la Chrome Web Store con un modelo de costos sostenible.
 - [ ] Pruebas con usuarios ciegos y con baja visión para validar los controles y el flujo de aprendizaje.
 
-## Equipo
-
-| Nombre | Rol |
-| --- | --- |
-| Keisy Barzola Jacobin | Desarrollo y diseño del proyecto |
-| Gino Andrés Herrada Peche | Desarrollo y diseño del proyecto |
-
 ## Licencia
 
-Por definir. <!-- Ej.: MIT -->
+MIT 
